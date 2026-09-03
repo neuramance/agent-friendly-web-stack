@@ -115,6 +115,10 @@ format_row() {
 
 cmd_audit() {
   local target="${1:-.}"
+  if [[ "${target}" == "--help" || "${target}" == "-h" ]]; then
+    cmd_help audit
+    return 0
+  fi
   if [[ ! -d "${target}" ]]; then
     printf 'Error: directory not found: %s\n' "${target}" >&2
     exit 2
@@ -411,6 +415,10 @@ cmd_scaffold() {
 
   while (($# > 0)); do
     case "$1" in
+      --help|-h)
+        cmd_help scaffold
+        return 0
+        ;;
       --dry-run)
         dry_run=1
         shift
@@ -418,6 +426,11 @@ cmd_scaffold() {
       --skip-install)
         skip_install=1
         shift
+        ;;
+      -*)
+        printf 'Error: unknown option "%s"\n\n' "$1" >&2
+        cmd_help scaffold >&2
+        exit 2
         ;;
       *)
         if [[ -z "${target}" ]]; then
@@ -642,6 +655,11 @@ SUPA_CONF
 
 cmd_spec() {
   local section="${1:-all}"
+  if [[ "${section}" == "--help" || "${section}" == "-h" ]]; then
+    cmd_help spec
+    return 0
+  fi
+
   local skill_file
   skill_file="$(find_skill_file)" || {
     printf 'Error: SKILL.md not found\n' >&2
@@ -692,6 +710,10 @@ cmd_install() {
   local dest_base=""
   while (($# > 0)); do
     case "$1" in
+      --help|-h)
+        cmd_help install
+        return 0
+        ;;
       --global)
         mode="global"
         shift
@@ -703,6 +725,11 @@ cmd_install() {
       --target)
         dest_base="$2"
         shift 2
+        ;;
+      -*)
+        printf 'Error: unknown option "%s"\n\n' "$1" >&2
+        cmd_help install >&2
+        exit 2
         ;;
       *)
         dest_base="$1"
@@ -744,7 +771,55 @@ cmd_install() {
 }
 
 cmd_help() {
-  cat <<'EOF'
+  case "${1:-}" in
+    audit)
+      cat <<'EOF'
+Usage: afws audit [path]
+
+Audit a project directory against the stack contract.
+Defaults to current directory when path is omitted.
+
+Exit codes:
+  0  Conforms to specification
+  1  Drift or violation detected
+  2  Usage error or missing path
+EOF
+      ;;
+    scaffold)
+      cat <<'EOF'
+Usage: afws scaffold <project-dir> [--dry-run] [--skip-install]
+
+Scaffold a new conforming Next.js project configured with StyleX and Supabase.
+
+Options:
+  --dry-run       Print scaffold commands without writing to disk
+  --skip-install  Generate project files without installing dependencies
+EOF
+      ;;
+    spec)
+      cat <<'EOF'
+Usage: afws spec [section]
+
+View normative sections from SKILL.md.
+
+Available sections:
+  all, stack, next, stylex, cache, data, repo, scripts, feedback, test, gate
+EOF
+      ;;
+    install)
+      cat <<'EOF'
+Usage: afws install [--global|--local] [--target <dir>]
+
+Install the skill into agent discovery paths.
+
+Options:
+  --global        Install to user home (~/.agents/skills)
+  --local         Install to current directory (./.agents/skills)
+  --target <dir>  Install into specified directory
+EOF
+      ;;
+    *)
+      cat <<'EOF'
 afws - Agent-Friendly Web Stack CLI
 
 Usage:
@@ -752,20 +827,25 @@ Usage:
   afws scaffold <dir> [--dry-run] Scaffold a new conforming Next.js project
   afws spec [section]            View the normative specification or a section
   afws install [--global|--local] Install the skill into agent discovery paths
-  afws help                      Display this help message
+  afws help [command]            Display this help message
 
 Exit codes:
   0  Conforms to specification
   1  Drift or violation detected
   2  Usage error or missing path
 EOF
+      ;;
+  esac
 }
 
 main() {
-  local subcmd="${1:-help}"
-  if [[ $# -gt 0 ]]; then
-    shift
+  if [[ $# -eq 0 ]]; then
+    cmd_help
+    return 0
   fi
+
+  local subcmd="$1"
+  shift
 
   case "${subcmd}" in
     audit)
@@ -781,7 +861,7 @@ main() {
       cmd_install "$@"
       ;;
     help|--help|-h)
-      cmd_help
+      cmd_help "$@"
       ;;
     *)
       printf 'Error: unknown command "%s"\n\n' "${subcmd}" >&2

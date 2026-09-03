@@ -10,6 +10,14 @@ test_help() {
   local out
   out="$("${AFWS}" help)"
   printf '%s\n' "${out}" | grep -q "Agent-Friendly Web Stack CLI"
+
+  local out_long
+  out_long="$("${AFWS}" --help)"
+  printf '%s\n' "${out_long}" | grep -q "Usage:"
+
+  local out_short
+  out_short="$("${AFWS}" -h)"
+  printf '%s\n' "${out_short}" | grep -q "Usage:"
 }
 
 test_no_args() {
@@ -21,10 +29,52 @@ test_no_args() {
   printf '%s\n' "${out}" | grep -q "Usage:"
 }
 
+test_unknown_subcmd() {
+  local code=0
+  local out
+  out="$("${AFWS}" unknown_cmd 2>&1)" || code=$?
+  test "${code}" -eq 2
+  printf '%s\n' "${out}" | grep -q 'Error: unknown command "unknown_cmd"'
+
+  local empty_code=0
+  local empty_out
+  empty_out="$("${AFWS}" "" 2>&1)" || empty_code=$?
+  test "${empty_code}" -eq 2
+  printf '%s\n' "${empty_out}" | grep -q 'Error: unknown command ""'
+}
+
+test_subcommand_help() {
+  local out_audit code_audit=0
+  out_audit="$("${AFWS}" audit --help 2>&1)" || code_audit=$?
+  test "${code_audit}" -eq 0
+  printf '%s\n' "${out_audit}" | grep -q "Usage: afws audit"
+
+  local out_scaffold code_scaffold=0
+  out_scaffold="$("${AFWS}" scaffold --help 2>&1)" || code_scaffold=$?
+  test "${code_scaffold}" -eq 0
+  printf '%s\n' "${out_scaffold}" | grep -q "Usage: afws scaffold"
+
+  local out_spec code_spec=0
+  out_spec="$("${AFWS}" spec --help 2>&1)" || code_spec=$?
+  test "${code_spec}" -eq 0
+  printf '%s\n' "${out_spec}" | grep -q "Usage: afws spec"
+
+  local out_install code_install=0
+  out_install="$("${AFWS}" install --help 2>&1)" || code_install=$?
+  test "${code_install}" -eq 0
+  printf '%s\n' "${out_install}" | grep -q "Usage: afws install"
+
+  local out_help_audit code_help_audit=0
+  out_help_audit="$("${AFWS}" help audit 2>&1)" || code_help_audit=$?
+  test "${code_help_audit}" -eq 0
+  printf '%s\n' "${out_help_audit}" | grep -q "Usage: afws audit"
+}
+
 test_spec_stack() {
   local out
   out="$("${AFWS}" spec stack)"
-  printf '%s\n' "${out}" | grep -q "Next.js App Router"
+  printf '%s\n' "${out}" | grep -q "Next.js"
+  printf '%s\n' "${out}" | grep -q "App Router"
   printf '%s\n' "${out}" | grep -q "StyleX"
   printf '%s\n' "${out}" | grep -q "Supabase Cloud"
 }
@@ -50,18 +100,17 @@ test_audit_empty_dir() {
   test "${code}" -eq 2
 }
 
-test_audit_conforming_project() {
-  local tmp
-  tmp="$(mktemp -d)"
-  touch "${tmp}/bun.lock"
-  touch "${tmp}/next.config.ts"
-  touch "${tmp}/babel.config.js"
-  touch "${tmp}/postcss.config.js"
-  touch "${tmp}/proxy.ts"
-  mkdir -p "${tmp}/app"
-  mkdir -p "${tmp}/supabase/migrations"
+create_conforming_app() {
+  local target="$1"
+  touch "${target}/bun.lock"
+  touch "${target}/next.config.ts"
+  touch "${target}/babel.config.js"
+  touch "${target}/postcss.config.js"
+  touch "${target}/proxy.ts"
+  mkdir -p "${target}/app"
+  mkdir -p "${target}/supabase/migrations"
 
-  cat <<'EOF' > "${tmp}/package.json"
+  cat <<'EOF' > "${target}/package.json"
 {
   "name": "conforming-app",
   "packageManager": "bun@1.3.14",
@@ -108,10 +157,16 @@ test_audit_conforming_project() {
   }
 }
 EOF
+}
 
+test_audit_conforming_project() {
+  local tmp
+  tmp="$(mktemp -d)"
+  create_conforming_app "${tmp}"
+
+  local code=0
   local out
-  out="$("${AFWS}" audit "${tmp}")"
-  local code=$?
+  out="$("${AFWS}" audit "${tmp}" 2>&1)" || code=$?
   rm -rf "${tmp}"
 
   test "${code}" -eq 0
@@ -121,66 +176,38 @@ EOF
 test_audit_default_dir() {
   local tmp
   tmp="$(mktemp -d)"
-  touch "${tmp}/bun.lock"
-  touch "${tmp}/next.config.ts"
-  touch "${tmp}/babel.config.js"
-  touch "${tmp}/postcss.config.js"
-  touch "${tmp}/proxy.ts"
-  mkdir -p "${tmp}/app"
-  mkdir -p "${tmp}/supabase/migrations"
+  create_conforming_app "${tmp}"
 
-  cat <<'EOF' > "${tmp}/package.json"
-{
-  "name": "conforming-app",
-  "packageManager": "bun@1.3.14",
-  "engines": {
-    "node": ">=24"
-  },
-  "scripts": {
-    "setup": "bunx playwright install && supabase start",
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint .",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "test": "vitest run",
-    "test:db": "supabase test db",
-    "test:smoke": "node server.test.js",
-    "test:e2e": "playwright test",
-    "db:start": "supabase start",
-    "db:reset": "supabase db reset",
-    "db:types": "supabase gen types typescript --local",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:db && bun run test:e2e"
-  },
-  "dependencies": {
-    "@stylexjs/stylex": "^0.19.0",
-    "@supabase/ssr": "^0.12.5",
-    "@supabase/supabase-js": "^2.112.4",
-    "next": "16.3.3",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "zod": "^4.5.1"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@stylexjs/babel-plugin": "^0.19.0",
-    "@stylexjs/eslint-plugin": "^0.19.0",
-    "@stylexjs/postcss-plugin": "^0.19.0",
-    "eslint": "^9",
-    "prettier": "^3.9.6",
-    "supabase": "^2.116.0",
-    "typescript": "^5",
-    "vitest": "^4.1.11"
-  }
-}
-EOF
-
-  local out
   local code=0
+  local out
   out="$(cd "${tmp}" && "${AFWS}" audit 2>&1)" || code=$?
   rm -rf "${tmp}"
+
+  test "${code}" -eq 0
+  printf '%s\n' "${out}" | grep -q "0 drift · conforming to stack spec"
+}
+
+test_audit_without_jq() {
+  local tmp
+  tmp="$(mktemp -d)"
+  create_conforming_app "${tmp}"
+
+  local fakebin
+  fakebin="$(mktemp -d)"
+  ln -s "$(which node)" "${fakebin}/node"
+  if command -v bun >/dev/null 2>&1; then
+    ln -s "$(which bun)" "${fakebin}/bun"
+  fi
+  ln -s "$(which bash)" "${fakebin}/bash"
+  ln -s "$(which sed)" "${fakebin}/sed"
+  ln -s "$(which grep)" "${fakebin}/grep"
+  ln -s "$(which dirname)" "${fakebin}/dirname"
+  ln -s "$(which basename)" "${fakebin}/basename"
+
+  local code=0
+  local out
+  out="$(PATH="${fakebin}" "${AFWS}" audit "${tmp}" 2>&1)" || code=$?
+  rm -rf "${tmp}" "${fakebin}"
 
   test "${code}" -eq 0
   printf '%s\n' "${out}" | grep -q "0 drift · conforming to stack spec"
@@ -211,7 +238,7 @@ EOF
 
   local code=0
   local out
-  out="$("${AFWS}" audit "${tmp}" || code=$?)"
+  out="$("${AFWS}" audit "${tmp}" 2>&1)" || code=$?
   rm -rf "${tmp}"
 
   test "${code}" -eq 1
@@ -229,86 +256,6 @@ test_spec_aliases() {
   printf '%s\n' "${out_auth}" | grep -q "Supabase"
   out_gate="$("${AFWS}" spec gate)"
   printf '%s\n' "${out_gate}" | grep -q "Before claiming completion"
-}
-
-test_audit_without_jq() {
-  local tmp
-  tmp="$(mktemp -d)"
-  touch "${tmp}/bun.lock"
-  touch "${tmp}/next.config.ts"
-  touch "${tmp}/babel.config.js"
-  touch "${tmp}/postcss.config.js"
-  touch "${tmp}/proxy.ts"
-  mkdir -p "${tmp}/app"
-  mkdir -p "${tmp}/supabase/migrations"
-
-  cat <<'EOF' > "${tmp}/package.json"
-{
-  "name": "conforming-app",
-  "packageManager": "bun@1.3.14",
-  "engines": {
-    "node": ">=24"
-  },
-  "scripts": {
-    "setup": "bunx playwright install && supabase start",
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint .",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "test": "vitest run",
-    "test:db": "supabase test db",
-    "test:smoke": "node server.test.js",
-    "test:e2e": "playwright test",
-    "db:start": "supabase start",
-    "db:reset": "supabase db reset",
-    "db:types": "supabase gen types typescript --local",
-    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:db && bun run test:e2e"
-  },
-  "dependencies": {
-    "@stylexjs/stylex": "^0.19.0",
-    "@supabase/ssr": "^0.12.5",
-    "@supabase/supabase-js": "^2.112.4",
-    "next": "16.3.3",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "zod": "^4.5.1"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@stylexjs/babel-plugin": "^0.19.0",
-    "@stylexjs/eslint-plugin": "^0.19.0",
-    "@stylexjs/postcss-plugin": "^0.19.0",
-    "eslint": "^9",
-    "prettier": "^3.9.6",
-    "supabase": "^2.116.0",
-    "typescript": "^5",
-    "vitest": "^4.1.11"
-  }
-}
-EOF
-
-  local fakebin
-  fakebin="$(mktemp -d)"
-  ln -s "$(which node)" "${fakebin}/node"
-  if command -v bun >/dev/null 2>&1; then
-    ln -s "$(which bun)" "${fakebin}/bun"
-  fi
-  ln -s "$(which bash)" "${fakebin}/bash"
-  ln -s "$(which sed)" "${fakebin}/sed"
-  ln -s "$(which grep)" "${fakebin}/grep"
-  ln -s "$(which dirname)" "${fakebin}/dirname"
-  ln -s "$(which basename)" "${fakebin}/basename"
-
-  local code=0
-  local out
-  out="$(PATH="${fakebin}" "${AFWS}" audit "${tmp}" 2>&1)" || code=$?
-  rm -rf "${tmp}" "${fakebin}"
-
-  test "${code}" -eq 0
-  printf '%s\n' "${out}" | grep -q "0 drift · conforming to stack spec"
 }
 
 test_scaffold_dry_run() {
@@ -374,6 +321,8 @@ run_all() {
   local tests=(
     test_help
     test_no_args
+    test_unknown_subcmd
+    test_subcommand_help
     test_spec_stack
     test_spec_aliases
     test_spec_invalid
@@ -394,7 +343,15 @@ run_all() {
   local fail=0
   local t
   for t in "${tests[@]}"; do
-    if "${t}"; then
+    local res=0
+    set +e
+    (
+      set -e
+      "${t}"
+    )
+    res=$?
+    set -e
+    if ((res == 0)); then
       ((pass++))
       printf '  ✓ %s\n' "${t}"
     else

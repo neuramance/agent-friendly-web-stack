@@ -45,6 +45,10 @@ Options:
 EOF
       exit 0
       ;;
+    -*)
+      printf 'Error: unknown option "%s"\n' "$1" >&2
+      exit 2
+      ;;
     *)
       target_dir="$1"
       shift
