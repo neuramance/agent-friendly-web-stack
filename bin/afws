@@ -762,7 +762,7 @@ EOF
 }
 
 main() {
-  local subcmd="${1:-audit}"
+  local subcmd="${1:-help}"
   if [[ $# -gt 0 ]]; then
     shift
   fi
