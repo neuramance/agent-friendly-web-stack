@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+find_skill_file() {
+  local candidate
+  for candidate in \
+    "${REPO_DIR}/SKILL.md" \
+    "${HOME}/.agents/skills/agent-friendly-web-stack/SKILL.md" \
+    "${HOME}/.claude/skills/agent-friendly-web-stack/SKILL.md" \
+    "$(pwd)/SKILL.md"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pkg_read() {
+  local file="$1"
+  local expr="$2"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "${expr} // empty" "${file}" 2>/dev/null || true
+  elif command -v bun >/dev/null 2>&1; then
+    bun -e "const p=require('${file}');try{const fn=new Function('p','return p.${expr#.}');const v=fn(p);if(v!==undefined&&v!==null)console.log(v)}catch(e){}" 2>/dev/null || true
+  elif command -v node >/dev/null 2>&1; then
+    node -e "const p=require('${file}');try{const fn=new Function('p','return p.${expr#.}');const v=fn(p);if(v!==undefined&&v!==null)console.log(v)}catch(e){}" 2>/dev/null || true
+  fi
+}
+
+pkg_has_dep() {
+  local file="$1"
+  local dep="$2"
+  local deps=""
+  if command -v jq >/dev/null 2>&1; then
+    deps="$(jq -r '((.dependencies // {}) + (.devDependencies // {})) | keys[]' "${file}" 2>/dev/null || true)"
+  elif command -v bun >/dev/null 2>&1; then
+    deps="$(bun -e "const p=require('${file}');console.log(Object.keys(Object.assign({}, p.dependencies, p.devDependencies)).join('\n'))" 2>/dev/null || true)"
+  elif command -v node >/dev/null 2>&1; then
+    deps="$(node -e "const p=require('${file}');console.log(Object.keys(Object.assign({}, p.dependencies, p.devDependencies)).join('\n'))" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${deps}" | grep -Fxq "${dep}"
+}
+
+pad_line() {
+  local text="$1"
+  local width=48
+  local stripped
+  stripped="$(printf '%s' "${text}" | sed -E $'s/\x1B\\[[0-9;]*[mK]//g')"
+  local len="${#stripped}"
+  if ((len > width)); then
+    local cut=$((width - 3))
+    text="${stripped:0:cut}..."
+    len="${#text}"
+  fi
+  local pad=$((width - len))
+  if ((pad < 0)); then
+    pad=0
+  fi
+  printf '│ %s%*s │\n' "${text}" "${pad}" ""
+}
+
+cmd_audit() {
+  local target="${1:-.}"
+  if [[ ! -d "${target}" ]]; then
+    printf 'Error: directory not found: %s\n' "${target}" >&2
+    exit 2
+  fi
+  target="$(cd "${target}" && pwd)"
+
+  local pkg="${target}/package.json"
+  if [[ ! -f "${pkg}" ]]; then
+    printf 'Error: package.json not found in %s\n' "${target}" >&2
+    exit 2
+  fi
+
+  local use_color=0
+  if [[ -t 1 ]] || [[ "${FORCE_COLOR:-0}" == "1" ]]; then
+    use_color=1
+  fi
+
+  local c_reset="" c_green="" c_red="" c_dim="" c_bold=""
+  if ((use_color)); then
+    c_reset=$'\033[0m'
+    c_green=$'\033[32m'
+    c_red=$'\033[31m'
+    c_dim=$'\033[2m'
+    c_bold=$'\033[1m'
+  fi
+
+  local drift_count=0
+  local ok_count=0
+
+  local rt_drift=()
+  if [[ ! -f "${target}/bun.lock" && ! -f "${target}/bun.lockb" ]]; then
+    rt_drift+=("missing bun.lock")
+  fi
+  local pkg_mgr
+  pkg_mgr="$(pkg_read "${pkg}" '.packageManager')"
+  if [[ ! "${pkg_mgr}" =~ ^bun@ ]]; then
+    rt_drift+=("packageManager != bun@*")
+  fi
+  local node_eng
+  node_eng="$(pkg_read "${pkg}" '.engines.node')"
+  if [[ -z "${node_eng}" ]]; then
+    rt_drift+=("missing engines.node")
+  fi
+
+  local all_drifts=()
+
+  local rt_status rt_detail
+  if ((${#rt_drift[@]} == 0)); then
+    ((ok_count++))
+    rt_status="${c_green}✓${c_reset} runtime"
+    rt_detail="bun.lock · ${pkg_mgr} · node ${node_eng}"
+  else
+    ((drift_count++))
+    rt_status="${c_red}✗${c_reset} runtime"
+    rt_detail="${#rt_drift[@]} drift"
+    for d in "${rt_drift[@]}"; do
+      all_drifts+=("runtime: ${d}")
+    done
+  fi
+
+  local fw_drift=()
+  if [[ ! -d "${target}/app" ]]; then
+    fw_drift+=("missing app/ directory")
+  fi
+  if [[ -d "${target}/pages" ]]; then
+    fw_drift+=("pages/ router forbidden")
+  fi
+  if [[ -d "${target}/src" ]]; then
+    fw_drift+=("src/ indirection forbidden")
+  fi
+  if [[ ! -f "${target}/next.config.ts" && ! -f "${target}/next.config.js" && ! -f "${target}/next.config.mjs" ]]; then
+    fw_drift+=("missing next.config.ts")
+  fi
+  if ! pkg_has_dep "${pkg}" "next"; then
+    fw_drift+=("next package not in dependencies")
+  fi
+
+  local fw_status fw_detail
+  if ((${#fw_drift[@]} == 0)); then
+    ((ok_count++))
+    fw_status="${c_green}✓${c_reset} framework"
+    fw_detail="next.js app router · server components · no src/"
+  else
+    ((drift_count++))
+    fw_status="${c_red}✗${c_reset} framework"
+    fw_detail="${#fw_drift[@]} drift"
+    for d in "${fw_drift[@]}"; do
+      all_drifts+=("framework: ${d}")
+    done
+  fi
+
+  local st_drift=()
+  if ! pkg_has_dep "${pkg}" "@stylexjs/stylex"; then
+    st_drift+=("missing @stylexjs/stylex")
+  fi
+  if pkg_has_dep "${pkg}" "tailwindcss"; then
+    st_drift+=("tailwindcss forbidden")
+  fi
+  if pkg_has_dep "${pkg}" "styled-components" || pkg_has_dep "${pkg}" "@emotion/react"; then
+    st_drift+=("competing css-in-js forbidden")
+  fi
+  if [[ ! -f "${target}/babel.config.js" && ! -f "${target}/babel.config.mjs" && ! -f "${target}/babel.config.json" ]]; then
+    st_drift+=("missing babel.config.js")
+  fi
+  if [[ ! -f "${target}/postcss.config.js" && ! -f "${target}/postcss.config.mjs" && ! -f "${target}/postcss.config.json" ]]; then
+    st_drift+=("missing postcss.config.js")
+  fi
+
+  local st_status st_detail
+  if ((${#st_drift[@]} == 0)); then
+    ((ok_count++))
+    st_status="${c_green}✓${c_reset} styling"
+    st_detail="stylex · zero-runtime atomic css · no tw"
+  else
+    ((drift_count++))
+    st_status="${c_red}✗${c_reset} styling"
+    st_detail="${#st_drift[@]} drift"
+    for d in "${st_drift[@]}"; do
+      all_drifts+=("styling: ${d}")
+    done
+  fi
+
+  local dt_drift=()
+  if ! pkg_has_dep "${pkg}" "@supabase/supabase-js"; then
+    dt_drift+=("missing @supabase/supabase-js")
+  fi
+  if ! pkg_has_dep "${pkg}" "@supabase/ssr"; then
+    dt_drift+=("missing @supabase/ssr")
+  fi
+  if [[ ! -d "${target}/supabase/migrations" && ! -f "${target}/supabase/config.toml" ]]; then
+    dt_drift+=("missing supabase/migrations")
+  fi
+  if [[ ! -f "${target}/proxy.ts" && ! -f "${target}/app/proxy.ts" ]]; then
+    dt_drift+=("missing proxy.ts for auth refresh")
+  fi
+
+  local dt_status dt_detail
+  if ((${#dt_drift[@]} == 0)); then
+    ((ok_count++))
+    dt_status="${c_green}✓${c_reset} data"
+    dt_detail="supabase ssr · rls grants · sql migrations"
+  else
+    ((drift_count++))
+    dt_status="${c_red}✗${c_reset} data"
+    dt_detail="${#dt_drift[@]} drift"
+    for d in "${dt_drift[@]}"; do
+      all_drifts+=("data: ${d}")
+    done
+  fi
+
+  local canonical_scripts=(
+    "setup" "dev" "build" "start" "typecheck" "lint"
+    "format" "format:check" "test" "test:db" "test:smoke" "test:e2e"
+    "db:start" "db:reset" "db:types" "check"
+  )
+  local script_keys
+  if command -v jq >/dev/null 2>&1; then
+    script_keys="$(jq -r '.scripts // {} | keys[]' "${pkg}" 2>/dev/null || true)"
+  else
+    script_keys="$(pkg_read "${pkg}" 'Object.keys(p.scripts || {})')"
+  fi
+
+  local missing_scripts=()
+  local s
+  for s in "${canonical_scripts[@]}"; do
+    if ! printf '%s\n' "${script_keys}" | grep -Fxq "${s}"; then
+      missing_scripts+=("${s}")
+    fi
+  done
+
+  local sc_status sc_detail
+  local present_count=$((16 - ${#missing_scripts[@]}))
+  if ((${#missing_scripts[@]} == 0)); then
+    ((ok_count++))
+    sc_status="${c_green}✓${c_reset} scripts"
+    sc_detail="16/16 canonical gates · bun run check"
+  else
+    ((drift_count++))
+    sc_status="${c_red}✗${c_reset} scripts"
+    sc_detail="${#missing_scripts[@]} missing (${present_count}/16)"
+    local IFS=", "
+    all_drifts+=("scripts: missing ${missing_scripts[*]}")
+  fi
+
+  local ts_drift=()
+  if ! pkg_has_dep "${pkg}" "vitest" && [[ ! -f "${target}/vitest.config.ts" && ! -f "${target}/vitest.config.mts" ]]; then
+    ts_drift+=("missing vitest")
+  fi
+  if ! pkg_has_dep "${pkg}" "@playwright/test" && [[ ! -f "${target}/playwright.config.ts" ]]; then
+    ts_drift+=("missing playwright")
+  fi
+  if ! pkg_has_dep "${pkg}" "@stylexjs/eslint-plugin"; then
+    ts_drift+=("missing @stylexjs/eslint-plugin")
+  fi
+
+  local ts_status ts_detail
+  if ((${#ts_drift[@]} == 0)); then
+    ((ok_count++))
+    ts_status="${c_green}✓${c_reset} tests"
+    ts_detail="vitest · playwright · stylex eslint"
+  else
+    ((drift_count++))
+    ts_status="${c_red}✗${c_reset} tests"
+    ts_detail="${#ts_drift[@]} drift"
+    for d in "${ts_drift[@]}"; do
+      all_drifts+=("tests: ${d}")
+    done
+  fi
+
+  printf '╭──────────────────────────────────────────────────╮\n'
+  pad_line "● ● ●  afws · audit"
+  printf '├──────────────────────────────────────────────────┤\n'
+  pad_line ""
+  pad_line "$ afws audit $(basename "${target}")"
+  pad_line ""
+  pad_line "$(printf '%-18s %s' "${rt_status}" "${c_dim}${rt_detail}${c_reset}")"
+  pad_line "$(printf '%-18s %s' "${fw_status}" "${c_dim}${fw_detail}${c_reset}")"
+  pad_line "$(printf '%-18s %s' "${st_status}" "${c_dim}${st_detail}${c_reset}")"
+  pad_line "$(printf '%-18s %s' "${dt_status}" "${c_dim}${dt_detail}${c_reset}")"
+  pad_line "$(printf '%-18s %s' "${sc_status}" "${c_dim}${sc_detail}${c_reset}")"
+  pad_line "$(printf '%-18s %s' "${ts_status}" "${c_dim}${ts_detail}${c_reset}")"
+  pad_line ""
+  if ((drift_count == 0)); then
+    pad_line "${ok_count} ok · 0 drift · conforming to stack spec"
+  else
+    pad_line "${ok_count} ok · ${drift_count} drift · specification mismatch"
+  fi
+  pad_line ""
+  printf '╰──────────────────────────────────────────────────╯\n'
+
+  if ((drift_count > 0)); then
+    printf '\nDrift details:\n'
+    local item
+    for item in "${all_drifts[@]}"; do
+      printf '  %s•%s %s\n' "${c_red}" "${c_reset}" "${item}"
+    done
+    printf '\n'
+    exit 1
+  fi
+  exit 0
+}
+
+cmd_scaffold() {
+  local target="${1:-}"
+  local dry_run=0
+  if [[ "${target}" == "--dry-run" ]]; then
+    dry_run=1
+    target="${2:-}"
+  elif [[ "${2:-}" == "--dry-run" ]]; then
+    dry_run=1
+  fi
+
+  if [[ -z "${target}" ]]; then
+    printf 'Usage: afws scaffold <project-dir> [--dry-run]\n' >&2
+    exit 2
+  fi
+
+  if [[ -e "${target}" && ${dry_run} -eq 0 ]]; then
+    printf 'Error: path already exists: %s\n' "${target}" >&2
+    exit 1
+  fi
+
+  local cmd_create="bunx create-next-app@latest ${target} --ts --eslint --app --no-src-dir --no-tailwind --import-alias \"@/*\" --no-agents-md --use-bun --yes"
+  local cmd_deps="bun add @stylexjs/stylex @supabase/supabase-js @supabase/ssr zod"
+  local cmd_dev_deps="bun add -d @stylexjs/babel-plugin @stylexjs/eslint-plugin @stylexjs/postcss-plugin vitest @testing-library/react @testing-library/dom jsdom @playwright/test supabase prettier"
+  local cmd_rm_readme="rm -f ${target}/README.md"
+
+  if ((dry_run)); then
+    printf 'Scaffold plan for %s:\n\n' "${target}"
+    printf '1. %s\n' "${cmd_create}"
+    printf '2. %s\n' "${cmd_rm_readme}"
+    printf '3. cd %s && %s\n' "${target}" "${cmd_deps}"
+    printf '4. cd %s && %s\n' "${target}" "${cmd_dev_deps}"
+    printf '5. Configure StyleX babel.config.js, postcss.config.js, and canonical scripts\n'
+    return 0
+  fi
+
+  eval "${cmd_create}"
+  eval "${cmd_rm_readme}"
+  (
+    cd "${target}"
+    eval "${cmd_deps}"
+    eval "${cmd_dev_deps}"
+  )
+  printf '\nScaffold complete. Run: cd %s && afws audit\n' "${target}"
+}
+
+cmd_spec() {
+  local section="${1:-all}"
+  local skill_file
+  skill_file="$(find_skill_file)" || {
+    printf 'Error: SKILL.md not found\n' >&2
+    exit 2
+  }
+
+  case "${section}" in
+    all)
+      cat "${skill_file}"
+      ;;
+    stack)
+      awk '/^## Required stack/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    next)
+      awk '/^## Next.js architecture/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    stylex)
+      awk '/^## StyleX contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    cache)
+      awk '/^## Caching and data freshness/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    data)
+      awk '/^## Data and security boundaries/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    repo)
+      awk '/^## Reproducible repository contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    feedback)
+      awk '/^## Feedback-loop contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    test)
+      awk '/^## Test contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    gate)
+      awk '/^## Completion gate/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
+      ;;
+    *)
+      printf 'Unknown section: %s\n' "${section}" >&2
+      printf 'Available: all, stack, next, stylex, cache, data, repo, feedback, test, gate\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+cmd_install() {
+  local mode="global"
+  local dest_base=""
+  while (($# > 0)); do
+    case "$1" in
+      --global)
+        mode="global"
+        shift
+        ;;
+      --local)
+        mode="local"
+        shift
+        ;;
+      --target)
+        dest_base="$2"
+        shift 2
+        ;;
+      *)
+        dest_base="$1"
+        shift
+        ;;
+    esac
+  done
+
+  local skill_file
+  skill_file="$(find_skill_file)" || {
+    printf 'Error: SKILL.md not found\n' >&2
+    exit 2
+  }
+
+  local target_agents target_claude
+  if [[ -n "${dest_base}" ]]; then
+    target_agents="${dest_base}/.agents/skills/agent-friendly-web-stack"
+    target_claude="${dest_base}/.claude/skills/agent-friendly-web-stack"
+  elif [[ "${mode}" == "global" ]]; then
+    target_agents="${HOME}/.agents/skills/agent-friendly-web-stack"
+    target_claude="${HOME}/.claude/skills/agent-friendly-web-stack"
+  else
+    target_agents="$(pwd)/.agents/skills/agent-friendly-web-stack"
+    target_claude="$(pwd)/.claude/skills/agent-friendly-web-stack"
+  fi
+
+  mkdir -p "${target_agents}"
+  cp "${skill_file}" "${target_agents}/SKILL.md"
+
+  mkdir -p "$(dirname "${target_claude}")"
+  rm -rf "${target_claude}"
+  ln -s "${target_agents}" "${target_claude}"
+
+  printf 'Installed agent-friendly-web-stack skill:\n'
+  printf '  → %s/SKILL.md\n' "${target_agents}"
+  printf '  → %s (symlink)\n' "${target_claude}"
+}
+
+cmd_help() {
+  cat <<'EOF'
+afws - Agent-Friendly Web Stack CLI
+
+Usage:
+  afws audit [path]              Audit a project directory against the stack contract
+  afws scaffold <dir> [--dry-run] Scaffold a new conforming Next.js project
+  afws spec [section]            View the normative specification or a section
+  afws install [--global|--local] Install the skill into agent discovery paths
+  afws help                      Display this help message
+
+Exit codes:
+  0  Conforms to specification
+  1  Drift or violation detected
+  2  Usage error or missing path
+EOF
+}
+
+main() {
+  local subcmd="${1:-audit}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  case "${subcmd}" in
+    audit)
+      cmd_audit "$@"
+      ;;
+    scaffold)
+      cmd_scaffold "$@"
+      ;;
+    spec)
+      cmd_spec "$@"
+      ;;
+    install)
+      cmd_install "$@"
+      ;;
+    help|--help|-h)
+      cmd_help
+      ;;
+    *)
+      printf 'Error: unknown command "%s"\n\n' "${subcmd}" >&2
+      cmd_help >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

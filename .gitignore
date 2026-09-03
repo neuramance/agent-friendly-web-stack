@@ -1,0 +1,10 @@
+.DS_Store
+*.swp
+*~
+node_modules/
+.next/
+coverage/
+test-results/
+.env.local
+.env
+tmp/
