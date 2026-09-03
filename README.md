@@ -1,18 +1,25 @@
+# Agent-Friendly Web Stack
+
+[![Agent Skills](https://img.shields.io/badge/agent--skills-ready-10b981.svg?style=flat-square)](SKILL.md)
+[![Bash 3.2+](https://img.shields.io/badge/bash-3.2%2B-blue.svg?style=flat-square)](bin/afws)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success.svg?style=flat-square)](bin/afws)
+[![License: MIT](https://img.shields.io/badge/license-MIT-purple.svg?style=flat-square)](LICENSE)
+
 ```
 ╭──────────────────────────────────────────────────╮
 │ ● ● ●  afws · audit                              │
 ├──────────────────────────────────────────────────┤
 │                                                  │
-│  $ afws audit my-saas-app                        │
+│ $ afws audit my-saas-app                         │
 │                                                  │
-│  ✓ runtime      bun.lock · bun@1.3.14 · node 22  │
-│  ✓ framework    next.js app router · no src/     │
-│  ✓ styling      stylex · zero-runtime atomic css │
-│  ✓ data         supabase ssr · sql migrations    │
-│  ✓ scripts      16/16 canonical gates present    │
-│  ✓ tests        vitest · playwright · pgtap      │
+│ ✓ runtime     bun.lock · bun · node LTS          │
+│ ✓ framework   next.js app router · no src/       │
+│ ✓ styling     stylex · zero-runtime atomic css   │
+│ ✓ data        supabase ssr · sql migrations      │
+│ ✓ scripts     16/16 canonical gates present      │
+│ ✓ tests       vitest · playwright · pgtap        │
 │                                                  │
-│  6 ok · 0 drift · conforming to stack spec       │
+│ 6 ok · 0 drift · conforming to stack spec        │
 │                                                  │
 ╰──────────────────────────────────────────────────╯
 ```
@@ -98,10 +105,11 @@ Use `--dry-run` to preview the exact execution steps without modifying disk.
 Inspect normative sections directly from the command line:
 
 ```bash
-bin/afws spec stack     # Required stack breakdown
-bin/afws spec stylex    # StyleX contract and token rules
-bin/afws spec data      # Data and security boundaries
-bin/afws spec gate      # Completion gate steps
+bin/afws spec stack
+bin/afws spec stylex
+bin/afws spec data
+bin/afws spec scripts
+bin/afws spec gate
 ```
 
 ## The Canonical 16-Script Contract

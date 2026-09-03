@@ -52,10 +52,30 @@ EOF
   esac
 done
 
+pad_line() {
+  local text="$1"
+  local width=48
+  local stripped
+  stripped="$(printf '%s' "${text}" | sed -E $'s/\x1B\\[[0-9;]*[mK]//g')"
+  local len="${#stripped}"
+  if ((len > width)); then
+    local cut=$((width - 3))
+    text="${stripped:0:cut}..."
+    len="${#text}"
+  fi
+  local pad=$((width - len))
+  if ((pad < 0)); then
+    pad=0
+  fi
+  printf '│ %s%*s │\n' "${text}" "${pad}" ""
+}
+
 dest_agents=""
 dest_claude=""
 
 if [[ -n "${target_dir}" ]]; then
+  mkdir -p "${target_dir}"
+  target_dir="$(cd "${target_dir}" && pwd)"
   dest_agents="${target_dir}/.agents/skills/agent-friendly-web-stack"
   dest_claude="${target_dir}/.claude/skills/agent-friendly-web-stack"
 elif [[ "${mode}" == "global" ]]; then
@@ -76,38 +96,50 @@ else
 fi
 
 rm -rf "${dest_claude}"
-ln -s "${dest_agents}" "${dest_claude}"
+ln -s "../../.agents/skills/agent-friendly-web-stack" "${dest_claude}"
 
 bin_installed=0
 bin_dest=""
 if ((install_bin)); then
-  for cand in "${HOME}/.local/bin" "/usr/local/bin"; do
-    if [[ -d "${cand}" && -w "${cand}" ]]; then
-      bin_dest="${cand}/afws"
-      if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/bin/afws" ]]; then
-        cp "${SCRIPT_DIR}/bin/afws" "${bin_dest}"
-      else
-        curl -fsSL "${RAW_BASE}/bin/afws" -o "${bin_dest}"
-      fi
-      chmod +x "${bin_dest}"
-      bin_installed=1
-      break
+  if [[ -n "${target_dir}" ]]; then
+    mkdir -p "${target_dir}/bin"
+    bin_dest="${target_dir}/bin/afws"
+    if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/bin/afws" ]]; then
+      cp "${SCRIPT_DIR}/bin/afws" "${bin_dest}"
+    else
+      curl -fsSL "${RAW_BASE}/bin/afws" -o "${bin_dest}"
     fi
-  done
+    chmod +x "${bin_dest}"
+    bin_installed=1
+  else
+    mkdir -p "${HOME}/.local/bin"
+    for cand in "${HOME}/.local/bin" "/usr/local/bin"; do
+      if [[ -d "${cand}" && -w "${cand}" ]]; then
+        bin_dest="${cand}/afws"
+        if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/bin/afws" ]]; then
+          cp "${SCRIPT_DIR}/bin/afws" "${bin_dest}"
+        else
+          curl -fsSL "${RAW_BASE}/bin/afws" -o "${bin_dest}"
+        fi
+        chmod +x "${bin_dest}"
+        bin_installed=1
+        break
+      fi
+    done
+  fi
 fi
 
 printf '\n'
 printf '╭──────────────────────────────────────────────────╮\n'
-printf '│ ● ● ●  afws · skill install                      │\n'
+pad_line "● ● ●  afws · skill install"
 printf '├──────────────────────────────────────────────────┤\n'
-printf '│                                                  │\n'
-printf '│  ✓ skill     %s/SKILL.md\n' "${dest_agents}"
-printf '│  ✓ claude    %s (symlink)\n' "${dest_claude}"
+pad_line ""
+pad_line "✓ skill     ${dest_agents}/SKILL.md"
+pad_line "✓ claude    ${dest_claude} (symlink)"
 if ((bin_installed)); then
-  printf '│  ✓ cli       %s\n' "${bin_dest}"
+  pad_line "✓ cli       ${bin_dest}"
 fi
-printf '│                                                  │\n'
-printf '│  Installed successfully. Agents ready.           │\n'
-printf '│                                                  │\n'
-printf '╰──────────────────────────────────────────────────╯\n'
-printf '\n'
+pad_line ""
+pad_line "Installed successfully. Agents ready."
+pad_line ""
+printf '╰──────────────────────────────────────────────────╯\n\n'

@@ -8,9 +8,11 @@ find_skill_file() {
   local candidate
   for candidate in \
     "${REPO_DIR}/SKILL.md" \
+    "${REPO_DIR}/.agents/skills/agent-friendly-web-stack/SKILL.md" \
     "${HOME}/.agents/skills/agent-friendly-web-stack/SKILL.md" \
     "${HOME}/.claude/skills/agent-friendly-web-stack/SKILL.md" \
-    "$(pwd)/SKILL.md"; do
+    "$(pwd)/SKILL.md" \
+    "$(pwd)/.agents/skills/agent-friendly-web-stack/SKILL.md"; do
     if [[ -f "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
       return 0
@@ -21,13 +23,29 @@ find_skill_file() {
 
 pkg_read() {
   local file="$1"
-  local expr="$2"
+  local expr="${2#.}"
   if command -v jq >/dev/null 2>&1; then
-    jq -r "${expr} // empty" "${file}" 2>/dev/null || true
+    jq -r ".${expr} // empty" "${file}" 2>/dev/null || true
   elif command -v bun >/dev/null 2>&1; then
-    bun -e "const p=require('${file}');try{const fn=new Function('p','return p.${expr#.}');const v=fn(p);if(v!==undefined&&v!==null)console.log(v)}catch(e){}" 2>/dev/null || true
+    bun -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));const v='${expr}'.split('.').reduce((a,k)=>a?.[k],p);if(v!=null)console.log(v)" 2>/dev/null || true
   elif command -v node >/dev/null 2>&1; then
-    node -e "const p=require('${file}');try{const fn=new Function('p','return p.${expr#.}');const v=fn(p);if(v!==undefined&&v!==null)console.log(v)}catch(e){}" 2>/dev/null || true
+    node -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));const v='${expr}'.split('.').reduce((a,k)=>a?.[k],p);if(v!=null)console.log(v)" 2>/dev/null || true
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import json,functools; p=json.load(open('${file}')); v=functools.reduce(lambda a,k: a.get(k) if isinstance(a,dict) else None, '${expr}'.split('.'), p); print(v if v is not None else '')" 2>/dev/null || true
+  fi
+}
+
+pkg_keys() {
+  local file="$1"
+  local field="${2#.}"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r ".${field} // {} | keys[]" "${file}" 2>/dev/null || true
+  elif command -v bun >/dev/null 2>&1; then
+    bun -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));for(const k of Object.keys(p['${field}']||{}))console.log(k)" 2>/dev/null || true
+  elif command -v node >/dev/null 2>&1; then
+    node -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));for(const k of Object.keys(p['${field}']||{}))console.log(k)" 2>/dev/null || true
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import json; p=json.load(open('${file}')); [print(k) for k in (p.get('${field}') or {}).keys()]" 2>/dev/null || true
   fi
 }
 
@@ -38,9 +56,11 @@ pkg_has_dep() {
   if command -v jq >/dev/null 2>&1; then
     deps="$(jq -r '((.dependencies // {}) + (.devDependencies // {})) | keys[]' "${file}" 2>/dev/null || true)"
   elif command -v bun >/dev/null 2>&1; then
-    deps="$(bun -e "const p=require('${file}');console.log(Object.keys(Object.assign({}, p.dependencies, p.devDependencies)).join('\n'))" 2>/dev/null || true)"
+    deps="$(bun -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));const d=Object.assign({},p.dependencies,p.devDependencies);for(const k of Object.keys(d))console.log(k)" 2>/dev/null || true)"
   elif command -v node >/dev/null 2>&1; then
-    deps="$(node -e "const p=require('${file}');console.log(Object.keys(Object.assign({}, p.dependencies, p.devDependencies)).join('\n'))" 2>/dev/null || true)"
+    deps="$(node -e "const p=JSON.parse(require('fs').readFileSync('${file}','utf8'));const d=Object.assign({},p.dependencies,p.devDependencies);for(const k of Object.keys(d))console.log(k)" 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    deps="$(python3 -c "import json; p=json.load(open('${file}')); d={}; d.update(p.get('dependencies') or {}); d.update(p.get('devDependencies') or {}); [print(k) for k in d.keys()]" 2>/dev/null || true)"
   fi
   printf '%s\n' "${deps}" | grep -Fxq "${dep}"
 }
@@ -61,6 +81,36 @@ pad_line() {
     pad=0
   fi
   printf '│ %s%*s │\n' "${text}" "${pad}" ""
+}
+
+format_row() {
+  local mark="$1"
+  local name="$2"
+  local detail="$3"
+  local use_color="${4:-0}"
+  local c_green="" c_red="" c_dim="" c_reset=""
+  if ((use_color)); then
+    c_green=$'\033[32m'
+    c_red=$'\033[31m'
+    c_dim=$'\033[2m'
+    c_reset=$'\033[0m'
+  fi
+  local mark_colored="${mark}"
+  if ((use_color)); then
+    if [[ "${mark}" == "✓" ]]; then
+      mark_colored="${c_green}✓${c_reset}"
+    else
+      mark_colored="${c_red}✗${c_reset}"
+    fi
+  fi
+  local label_width=11
+  local pad=$((label_width - ${#name}))
+  local pad_spaces=""
+  if ((pad > 0)); then
+    pad_spaces="$(printf '%*s' "${pad}" "")"
+  fi
+  local content="${mark_colored} ${name}${pad_spaces} ${c_dim}${detail}${c_reset}"
+  pad_line "${content}"
 }
 
 cmd_audit() {
@@ -111,14 +161,13 @@ cmd_audit() {
 
   local all_drifts=()
 
-  local rt_status rt_detail
+  local rt_mark="✓" rt_detail=""
   if ((${#rt_drift[@]} == 0)); then
     ((ok_count++))
-    rt_status="${c_green}✓${c_reset} runtime"
-    rt_detail="bun.lock · ${pkg_mgr} · node ${node_eng}"
+    rt_detail="bun.lock · bun · node LTS"
   else
     ((drift_count++))
-    rt_status="${c_red}✗${c_reset} runtime"
+    rt_mark="✗"
     rt_detail="${#rt_drift[@]} drift"
     for d in "${rt_drift[@]}"; do
       all_drifts+=("runtime: ${d}")
@@ -142,14 +191,13 @@ cmd_audit() {
     fw_drift+=("next package not in dependencies")
   fi
 
-  local fw_status fw_detail
+  local fw_mark="✓" fw_detail=""
   if ((${#fw_drift[@]} == 0)); then
     ((ok_count++))
-    fw_status="${c_green}✓${c_reset} framework"
-    fw_detail="next.js app router · server components · no src/"
+    fw_detail="next.js app router · no src/"
   else
     ((drift_count++))
-    fw_status="${c_red}✗${c_reset} framework"
+    fw_mark="✗"
     fw_detail="${#fw_drift[@]} drift"
     for d in "${fw_drift[@]}"; do
       all_drifts+=("framework: ${d}")
@@ -173,14 +221,13 @@ cmd_audit() {
     st_drift+=("missing postcss.config.js")
   fi
 
-  local st_status st_detail
+  local st_mark="✓" st_detail=""
   if ((${#st_drift[@]} == 0)); then
     ((ok_count++))
-    st_status="${c_green}✓${c_reset} styling"
-    st_detail="stylex · zero-runtime atomic css · no tw"
+    st_detail="stylex · zero-runtime atomic css"
   else
     ((drift_count++))
-    st_status="${c_red}✗${c_reset} styling"
+    st_mark="✗"
     st_detail="${#st_drift[@]} drift"
     for d in "${st_drift[@]}"; do
       all_drifts+=("styling: ${d}")
@@ -201,14 +248,13 @@ cmd_audit() {
     dt_drift+=("missing proxy.ts for auth refresh")
   fi
 
-  local dt_status dt_detail
+  local dt_mark="✓" dt_detail=""
   if ((${#dt_drift[@]} == 0)); then
     ((ok_count++))
-    dt_status="${c_green}✓${c_reset} data"
-    dt_detail="supabase ssr · rls grants · sql migrations"
+    dt_detail="supabase ssr · sql migrations"
   else
     ((drift_count++))
-    dt_status="${c_red}✗${c_reset} data"
+    dt_mark="✗"
     dt_detail="${#dt_drift[@]} drift"
     for d in "${dt_drift[@]}"; do
       all_drifts+=("data: ${d}")
@@ -221,11 +267,7 @@ cmd_audit() {
     "db:start" "db:reset" "db:types" "check"
   )
   local script_keys
-  if command -v jq >/dev/null 2>&1; then
-    script_keys="$(jq -r '.scripts // {} | keys[]' "${pkg}" 2>/dev/null || true)"
-  else
-    script_keys="$(pkg_read "${pkg}" 'Object.keys(p.scripts || {})')"
-  fi
+  script_keys="$(pkg_keys "${pkg}" "scripts")"
 
   local missing_scripts=()
   local s
@@ -235,15 +277,14 @@ cmd_audit() {
     fi
   done
 
-  local sc_status sc_detail
+  local sc_mark="✓" sc_detail=""
   local present_count=$((16 - ${#missing_scripts[@]}))
   if ((${#missing_scripts[@]} == 0)); then
     ((ok_count++))
-    sc_status="${c_green}✓${c_reset} scripts"
-    sc_detail="16/16 canonical gates · bun run check"
+    sc_detail="16/16 canonical gates present"
   else
     ((drift_count++))
-    sc_status="${c_red}✗${c_reset} scripts"
+    sc_mark="✗"
     sc_detail="${#missing_scripts[@]} missing (${present_count}/16)"
     local IFS=", "
     all_drifts+=("scripts: missing ${missing_scripts[*]}")
@@ -260,14 +301,13 @@ cmd_audit() {
     ts_drift+=("missing @stylexjs/eslint-plugin")
   fi
 
-  local ts_status ts_detail
+  local ts_mark="✓" ts_detail=""
   if ((${#ts_drift[@]} == 0)); then
     ((ok_count++))
-    ts_status="${c_green}✓${c_reset} tests"
-    ts_detail="vitest · playwright · stylex eslint"
+    ts_detail="vitest · playwright · pgtap"
   else
     ((drift_count++))
-    ts_status="${c_red}✗${c_reset} tests"
+    ts_mark="✗"
     ts_detail="${#ts_drift[@]} drift"
     for d in "${ts_drift[@]}"; do
       all_drifts+=("tests: ${d}")
@@ -280,12 +320,12 @@ cmd_audit() {
   pad_line ""
   pad_line "$ afws audit $(basename "${target}")"
   pad_line ""
-  pad_line "$(printf '%-18s %s' "${rt_status}" "${c_dim}${rt_detail}${c_reset}")"
-  pad_line "$(printf '%-18s %s' "${fw_status}" "${c_dim}${fw_detail}${c_reset}")"
-  pad_line "$(printf '%-18s %s' "${st_status}" "${c_dim}${st_detail}${c_reset}")"
-  pad_line "$(printf '%-18s %s' "${dt_status}" "${c_dim}${dt_detail}${c_reset}")"
-  pad_line "$(printf '%-18s %s' "${sc_status}" "${c_dim}${sc_detail}${c_reset}")"
-  pad_line "$(printf '%-18s %s' "${ts_status}" "${c_dim}${ts_detail}${c_reset}")"
+  format_row "${rt_mark}" "runtime" "${rt_detail}" "${use_color}"
+  format_row "${fw_mark}" "framework" "${fw_detail}" "${use_color}"
+  format_row "${st_mark}" "styling" "${st_detail}" "${use_color}"
+  format_row "${dt_mark}" "data" "${dt_detail}" "${use_color}"
+  format_row "${sc_mark}" "scripts" "${sc_detail}" "${use_color}"
+  format_row "${ts_mark}" "tests" "${ts_detail}" "${use_color}"
   pad_line ""
   if ((drift_count == 0)); then
     pad_line "${ok_count} ok · 0 drift · conforming to stack spec"
@@ -307,18 +347,89 @@ cmd_audit() {
   exit 0
 }
 
-cmd_scaffold() {
-  local target="${1:-}"
-  local dry_run=0
-  if [[ "${target}" == "--dry-run" ]]; then
-    dry_run=1
-    target="${2:-}"
-  elif [[ "${2:-}" == "--dry-run" ]]; then
-    dry_run=1
+update_package_scripts() {
+  local pkg="$1"
+  if command -v bun >/dev/null 2>&1; then
+    bun -e "
+const fs = require('fs');
+const p = JSON.parse(fs.readFileSync('${pkg}', 'utf8'));
+p.packageManager = p.packageManager || 'bun@1.3.14';
+p.engines = Object.assign({ node: '>=22' }, p.engines);
+p.scripts = Object.assign({}, p.scripts, {
+  'setup': 'bunx playwright install chromium && supabase start',
+  'dev': 'next dev',
+  'build': 'next build',
+  'start': 'next start',
+  'typecheck': 'next typegen && tsc --noEmit',
+  'lint': 'eslint .',
+  'format': 'prettier --write .',
+  'format:check': 'prettier --check .',
+  'test': 'vitest run',
+  'test:db': 'supabase test db',
+  'test:smoke': 'node server.test.js',
+  'test:e2e': 'playwright test',
+  'db:start': 'supabase start',
+  'db:reset': 'supabase db reset',
+  'db:types': 'supabase gen types typescript --local > lib/database.types.ts',
+  'check': 'bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:db && bun run test:e2e'
+});
+fs.writeFileSync('${pkg}', JSON.stringify(p, null, 2) + '\n');
+"
+  elif command -v node >/dev/null 2>&1; then
+    node -e "
+const fs = require('fs');
+const p = JSON.parse(fs.readFileSync('${pkg}', 'utf8'));
+p.packageManager = p.packageManager || 'bun@1.3.14';
+p.engines = Object.assign({ node: '>=22' }, p.engines);
+p.scripts = Object.assign({}, p.scripts, {
+  'setup': 'bunx playwright install chromium && supabase start',
+  'dev': 'next dev',
+  'build': 'next build',
+  'start': 'next start',
+  'typecheck': 'next typegen && tsc --noEmit',
+  'lint': 'eslint .',
+  'format': 'prettier --write .',
+  'format:check': 'prettier --check .',
+  'test': 'vitest run',
+  'test:db': 'supabase test db',
+  'test:smoke': 'node server.test.js',
+  'test:e2e': 'playwright test',
+  'db:start': 'supabase start',
+  'db:reset': 'supabase db reset',
+  'db:types': 'supabase gen types typescript --local > lib/database.types.ts',
+  'check': 'bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:db && bun run test:e2e'
+});
+fs.writeFileSync('${pkg}', JSON.stringify(p, null, 2) + '\n');
+"
   fi
+}
+
+cmd_scaffold() {
+  local target=""
+  local dry_run=0
+  local skip_install=0
+
+  while (($# > 0)); do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      --skip-install)
+        skip_install=1
+        shift
+        ;;
+      *)
+        if [[ -z "${target}" ]]; then
+          target="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
 
   if [[ -z "${target}" ]]; then
-    printf 'Usage: afws scaffold <project-dir> [--dry-run]\n' >&2
+    printf 'Usage: afws scaffold <project-dir> [--dry-run] [--skip-install]\n' >&2
     exit 2
   fi
 
@@ -338,18 +449,195 @@ cmd_scaffold() {
     printf '2. %s\n' "${cmd_rm_readme}"
     printf '3. cd %s && %s\n' "${target}" "${cmd_deps}"
     printf '4. cd %s && %s\n' "${target}" "${cmd_dev_deps}"
-    printf '5. Configure StyleX babel.config.js, postcss.config.js, and canonical scripts\n'
+    printf '5. Configure StyleX (babel.config.js, postcss.config.js, app/globals.css)\n'
+    printf '6. Configure Supabase (proxy.ts, supabase/migrations, supabase/config.toml)\n'
+    printf '7. Configure Next.js (next.config.ts) and testing (vitest.config.ts, playwright.config.ts)\n'
+    printf '8. Inject 16 canonical scripts and bun/node engines in package.json\n'
     return 0
   fi
 
-  eval "${cmd_create}"
-  eval "${cmd_rm_readme}"
-  (
-    cd "${target}"
-    eval "${cmd_deps}"
-    eval "${cmd_dev_deps}"
+  if ((skip_install)); then
+    mkdir -p "${target}/app" "${target}/supabase/migrations"
+    touch "${target}/bun.lock"
+    cat <<'SKP_PKG' > "${target}/package.json"
+{
+  "name": "afws-app",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "bunx playwright install chromium && supabase start",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "next typegen && tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:db": "supabase test db",
+    "test:smoke": "node server.test.js",
+    "test:e2e": "playwright test",
+    "db:start": "supabase start",
+    "db:reset": "supabase db reset",
+    "db:types": "supabase gen types typescript --local > lib/database.types.ts",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run test:db && bun run test:e2e"
+  },
+  "dependencies": {
+    "@stylexjs/stylex": "^0.19.0",
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.112.4",
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "^4.5.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@stylexjs/babel-plugin": "^0.19.0",
+    "@stylexjs/eslint-plugin": "^0.19.0",
+    "@stylexjs/postcss-plugin": "^0.19.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.3",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.6",
+    "supabase": "^2.116.0",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}
+SKP_PKG
+  else
+    eval "${cmd_create}"
+    eval "${cmd_rm_readme}"
+    (
+      cd "${target}"
+      eval "${cmd_deps}"
+      eval "${cmd_dev_deps}"
+    )
+    update_package_scripts "${target}/package.json"
+  fi
+
+  cat <<'STYLE_BABEL' > "${target}/babel.config.js"
+module.exports = {
+  presets: ['next/babel'],
+  plugins: [
+    [
+      '@stylexjs/babel-plugin',
+      {
+        dev: process.env.NODE_ENV === 'development',
+        runtimeInjection: false,
+        genConditionalClasses: true,
+        treeshakeCompensation: true,
+        unstable_moduleResolution: {
+          type: 'commonJS',
+          rootDir: __dirname,
+        },
+      },
+    ],
+  ],
+};
+STYLE_BABEL
+
+  cat <<'STYLE_POSTCSS' > "${target}/postcss.config.js"
+module.exports = {
+  plugins: {
+    '@stylexjs/postcss-plugin': {
+      include: ['app/**/*.{js,jsx,ts,tsx}'],
+    },
+  },
+};
+STYLE_POSTCSS
+
+  cat <<'SUPA_PROXY' > "${target}/proxy.ts"
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse, type NextRequest } from 'next/server'
+
+export async function updateSession(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({
+    request,
+  })
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
+      },
+    }
   )
-  printf '\nScaffold complete. Run: cd %s && afws audit\n' "${target}"
+
+  await supabase.auth.getClaims()
+
+  return supabaseResponse
+}
+SUPA_PROXY
+
+  cat <<'NEXT_CONF' > "${target}/next.config.ts"
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  agentRules: false,
+};
+
+export default nextConfig;
+NEXT_CONF
+
+  cat <<'VITEST_CONF' > "${target}/vitest.config.ts"
+import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+  },
+})
+VITEST_CONF
+
+  cat <<'PLAYWRIGHT_CONF' > "${target}/playwright.config.ts"
+import { defineConfig, devices } from '@playwright/test'
+
+export default defineConfig({
+  testDir: './tests/e2e',
+  fullyParallel: true,
+  reporter: 'list',
+  use: {
+    baseURL: 'http://localhost:3000',
+  },
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+})
+PLAYWRIGHT_CONF
+
+  mkdir -p "${target}/supabase/migrations"
+  cat <<'SUPA_CONF' > "${target}/supabase/config.toml"
+project_id = "local"
+SUPA_CONF
+
+  printf '@stylex;\n' > "${target}/app/globals.css"
+
+  printf '\nScaffold complete. Running audit...\n\n'
+  cmd_audit "${target}"
 }
 
 cmd_spec() {
@@ -364,36 +652,36 @@ cmd_spec() {
     all)
       cat "${skill_file}"
       ;;
-    stack)
+    stack|required)
       awk '/^## Required stack/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    next)
+    next|app|architecture)
       awk '/^## Next.js architecture/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    stylex)
+    stylex|styling)
       awk '/^## StyleX contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    cache)
+    cache|caching)
       awk '/^## Caching and data freshness/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    data)
+    data|security|auth)
       awk '/^## Data and security boundaries/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    repo)
+    repo|scripts|contract)
       awk '/^## Reproducible repository contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    feedback)
+    feedback|loop|verification)
       awk '/^## Feedback-loop contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    test)
+    test|tests)
       awk '/^## Test contract/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
-    gate)
+    gate|completion)
       awk '/^## Completion gate/{flag=1; next} /^## /{flag=0} flag' "${skill_file}"
       ;;
     *)
       printf 'Unknown section: %s\n' "${section}" >&2
-      printf 'Available: all, stack, next, stylex, cache, data, repo, feedback, test, gate\n' >&2
+      printf 'Available: all, stack, next, stylex, cache, data, repo, scripts, feedback, test, gate\n' >&2
       exit 2
       ;;
   esac
@@ -431,6 +719,8 @@ cmd_install() {
 
   local target_agents target_claude
   if [[ -n "${dest_base}" ]]; then
+    mkdir -p "${dest_base}"
+    dest_base="$(cd "${dest_base}" && pwd)"
     target_agents="${dest_base}/.agents/skills/agent-friendly-web-stack"
     target_claude="${dest_base}/.claude/skills/agent-friendly-web-stack"
   elif [[ "${mode}" == "global" ]]; then
@@ -446,7 +736,7 @@ cmd_install() {
 
   mkdir -p "$(dirname "${target_claude}")"
   rm -rf "${target_claude}"
-  ln -s "${target_agents}" "${target_claude}"
+  ln -s "../../.agents/skills/agent-friendly-web-stack" "${target_claude}"
 
   printf 'Installed agent-friendly-web-stack skill:\n'
   printf '  → %s/SKILL.md\n' "${target_agents}"
