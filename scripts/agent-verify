@@ -7,7 +7,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
 
 printf 'Checking shell script syntax...\n'
-for sh in bin/afws install.sh scripts/agent-verify tests/test_afws.sh; do
+for sh in install.sh scripts/agent-verify tests/test_install.sh; do
   if [[ -f "${sh}" ]]; then
     bash -n "${sh}"
     printf '  ✓ syntax: %s\n' "${sh}"
@@ -16,7 +16,7 @@ done
 
 printf '\nVerifying zero comment rule in codebase...\n'
 fail_comment=0
-for sh in bin/afws install.sh scripts/agent-verify tests/test_afws.sh; do
+for sh in install.sh scripts/agent-verify tests/test_install.sh; do
   if grep -n '^[[:space:]]*#[^!]' "${sh}" >/dev/null 2>&1; then
     printf '  ✗ forbidden comment found in %s\n' "${sh}" >&2
     grep -n '^[[:space:]]*#[^!]' "${sh}" >&2
@@ -29,6 +29,6 @@ fi
 printf '  ✓ zero comments verified\n'
 
 printf '\nRunning test suite...\n'
-"${REPO_DIR}/tests/test_afws.sh"
+"${REPO_DIR}/tests/test_install.sh"
 
 printf '\nAll verification checks passed.\n'
