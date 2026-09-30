@@ -2,7 +2,7 @@
 
 **One default stack for greenfield web apps, packaged as an agent skill.**
 
-Built for new browser-based, authenticated, relational apps that work request-response: SaaS products, internal tools, CRUD apps. It keeps Next.js's own defaults and names one choice for every other concern, so agents build instead of re-deciding the stack. Agents keep an existing app's stack unless you ask to migrate, and depart from a default only when a concrete requirement or you call for it.
+Built for new browser-based, authenticated, relational apps that work request-response: SaaS products, internal tools, CRUD apps. It follows create-next-app's defaults, with Oxlint in place of ESLint, and names one choice for every other concern, so agents build instead of re-deciding the stack. Agents keep an existing app's stack unless you ask to migrate, and depart from a default only when a concrete requirement or you call for it.
 
 ## The stack
 
@@ -25,10 +25,10 @@ Built for new browser-based, authenticated, relational apps that work request-re
 | Unit and component testing | Vitest and Testing Library |
 | Database testing | pgTAP through Supabase CLI |
 | Browser and end-to-end testing | Playwright |
-| Linting | ESLint |
-| Formatting | Prettier |
+| Linting | Oxlint |
+| Formatting | Oxfmt |
 
-[`SKILL.md`](SKILL.md) adds the rules agents follow for release selection and database security.
+[`SKILL.md`](SKILL.md) adds the rules agents follow for releases, linting, and database security.
 
 ## Install
 
