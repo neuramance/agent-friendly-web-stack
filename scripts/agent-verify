@@ -28,6 +28,13 @@ if ((fail_comment)); then
 fi
 printf '  ✓ zero comments verified\n'
 
+printf '\nVerifying README stack table matches SKILL.md...\n'
+if ! diff <(grep '^|' SKILL.md) <(grep '^|' README.md) >&2; then
+  printf '  ✗ README.md stack table differs from SKILL.md\n' >&2
+  exit 1
+fi
+printf '  ✓ stack tables match\n'
+
 printf '\nRunning test suite...\n'
 "${REPO_DIR}/tests/test_install.sh"
 

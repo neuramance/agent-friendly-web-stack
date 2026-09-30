@@ -2,25 +2,33 @@
 
 **One default stack for greenfield web apps, packaged as an agent skill.**
 
-Built for new browser-based, authenticated, relational apps that work request-response: SaaS products, internal tools, CRUD apps. The skill picks the tools and leaves implementation and workflow to the project. Agents keep an existing app's stack unless you ask to migrate, and depart from a default only when a concrete requirement or you call for it.
+Built for new browser-based, authenticated, relational apps that work request-response: SaaS products, internal tools, CRUD apps. It keeps Next.js's own defaults and names one choice for every other concern, so agents build instead of re-deciding the stack. Agents keep an existing app's stack unless you ask to migrate, and depart from a default only when a concrete requirement or you call for it.
 
 ## The stack
 
-| Layer         | Choice                                                                  |
-| ------------- | ----------------------------------------------------------------------- |
-| Language      | TypeScript                                                              |
-| Framework     | Next.js App Router · React · Turbopack                                  |
-| Styling       | StyleX                                                                  |
-| Tooling       | Bun for packages and scripts · Node.js Active LTS runtime               |
-| Backend       | Supabase Cloud · Supabase Postgres                                      |
-| Auth          | Supabase Auth with `@supabase/ssr`                                      |
-| Data          | `@supabase/supabase-js` · PostgreSQL grants and Row Level Security      |
-| Schema        | Supabase CLI · SQL migrations · generated TypeScript types              |
-| Validation    | Zod                                                                     |
-| Testing       | Vitest and Testing Library · pgTAP via Supabase CLI · Playwright        |
-| Lint & format | ESLint · Prettier                                                       |
+| Concern | Choice |
+| --- | --- |
+| Language | TypeScript |
+| Application framework and UI | Next.js App Router with React |
+| Application bundler | Turbopack |
+| Styling | Tailwind CSS |
+| UI components | shadcn/ui |
+| Package manager and task runner | Bun |
+| Application runtime | Latest Node.js LTS |
+| Backend platform | Supabase Cloud |
+| Database | Supabase Postgres |
+| Authentication | Supabase Auth with `@supabase/ssr` |
+| Data access | `@supabase/supabase-js` |
+| Database authorization | PostgreSQL grants and Row Level Security |
+| Migrations and database types | Supabase CLI, SQL migrations, and generated TypeScript types |
+| Runtime validation | Zod |
+| Unit and component testing | Vitest and Testing Library |
+| Database testing | pgTAP through Supabase CLI |
+| Browser and end-to-end testing | Playwright |
+| Linting | ESLint |
+| Formatting | Prettier |
 
-Releases are chosen at scaffold time to be supported and mutually compatible. The full definition is [`SKILL.md`](SKILL.md).
+[`SKILL.md`](SKILL.md) adds the rules agents follow for release selection and database security.
 
 ## Install
 
