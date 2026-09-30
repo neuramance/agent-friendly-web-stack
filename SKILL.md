@@ -12,9 +12,10 @@ Use this stack for new browser-based, authenticated relational applications buil
 | Language | TypeScript |
 | Application framework and UI | Next.js App Router with React |
 | Application bundler | Turbopack |
-| Styling | StyleX |
+| Styling | Tailwind CSS |
+| UI components | shadcn/ui |
 | Package manager and task runner | Bun |
-| Application runtime | Node.js Active LTS |
+| Application runtime | Latest Node.js LTS |
 | Backend platform | Supabase Cloud |
 | Database | Supabase Postgres |
 | Authentication | Supabase Auth with `@supabase/ssr` |
@@ -28,4 +29,4 @@ Use this stack for new browser-based, authenticated relational applications buil
 | Linting | ESLint |
 | Formatting | Prettier |
 
-Use these defaults unless a concrete requirement or the user calls for another choice. Select mutually compatible supported releases, including the React version supported by Next.js. Leave implementation and workflow decisions to the task and repository.
+Use these defaults unless a concrete requirement or the user calls for another choice. Select the newest releases that work together, including the React version Next.js supports; confirm a combination with lint, type checking, tests, and a build, because `eslint-config-next`'s plugins can lag new ESLint and TypeScript majors. Run package scripts with `bun run`, because `bun test` starts Bun's test runner instead of Vitest. Enable Row Level Security on every table the Supabase Data API exposes, grant each role only the privileges it needs, prove allowed and denied access with pgTAP, and verify identity on the server with `supabase.auth.getClaims()`. Leave other implementation and workflow decisions to the task and repository.
